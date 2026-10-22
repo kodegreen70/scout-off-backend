@@ -68,3 +68,78 @@ When upgrading to a new stable Rust toolchain:
    - [`.github/workflows/soroban-e2e.yml`](../.github/workflows/soroban-e2e.yml)
 3. Update references in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 4. Run `cargo test` and `cargo build --release` to verify compilation, test passes, and bytecode stability.
+
+---
+
+## WASM Size Budgets & CI Enforcement
+
+Soroban contracts are limited to **65 KB (65536 bytes)** per contract at deployment. To prevent silent size growth that could eventually exceed this hard limit, we enforce per-contract WASM size budgets in CI.
+
+### Overview
+
+- **Budget file**: [`contracts/wasm-size-budgets.json`](wasm-size-budgets.json)
+  - Defines maximum WASM size (in bytes) for each contract.
+  - Includes a `_default` fallback (set to 65000 bytes) for any contract not explicitly listed.
+- **CI check**: [`scripts/check-contract-wasm-size.js`](../scripts/check-contract-wasm-size.js)
+  - Runs during the **contract-ci** workflow after building WASM binaries.
+  - Compares each built `.wasm` file size against its budget.
+  - Reports sizes to the GitHub Step Summary with a markdown table.
+  - **Fails CI** if any contract exceeds its budget.
+  - On pull requests, displays size delta (change) vs. the base branch.
+
+### Current Budgets
+
+| Contract | Budget |
+|---|---:|
+| `scout_off_register.wasm` | 60 KB |
+| `scout_off_progress.wasm` | 58 KB |
+| `scout_off_subscription.wasm` | 62 KB |
+| `scout_off_connection.wasm` | 61 KB |
+| `scout_off_player_token.wasm` | 64 KB |
+| `_default` | 65 KB |
+
+Initial budgets are set with **15% headroom** below the Soroban 65 KB limit to provide room for code growth while keeping sizes within safe operating bounds.
+
+### Raising a Budget
+
+If a contract legitimately needs a larger budget (e.g., due to new features or refactoring), follow this process:
+
+1. **Edit the budget file**:
+   ```bash
+   # contracts/wasm-size-budgets.json
+   {
+     "scout_off_register.wasm": 60000,
+     "scout_off_progress.wasm": 58000,
+     …
+   }
+   ```
+
+2. **Commit and push** your changes (both code and budget update) to your branch.
+
+3. **Create a pull request** with:
+   - Explanation of why the size increase is necessary (new feature, refactoring, etc.).
+   - Before and after WASM size comparison (shown automatically in the PR via the CI step summary).
+
+4. **Request reviewer approval**:
+   - Reviewers should verify the size increase is justified and not due to inefficient code or unnecessary dependencies.
+   - Only merge if the increase is approved and necessary.
+
+### Monitoring Size Over Time
+
+The CI step summary on each PR shows:
+- Current contract size
+- Budget for that contract
+- Percentage of budget used
+- ✓ / ✗ indicator (pass/fail)
+- **Delta vs. base branch** (how many bytes the contract grew or shrank on this PR)
+
+Consistently reviewing deltas helps catch unintended bloat early.
+
+### Optimization Strategies
+
+If a contract is approaching its budget, consider:
+1. **Review dependencies** – Unused crates add significant WASM bloat; audit `Cargo.toml`.
+2. **Inline vs. helper functions** – Small helper functions can sometimes be inlined by the compiler to reduce code size.
+3. **Feature flags** – Use Cargo feature flags to conditionally compile code.
+4. **Code deduplication** – Move repeated logic into shared utility functions in the `shared` contract.
+5. **Compiler optimizations** – `.cargo/config.toml` already sets `opt-level = "z"` for release builds; ensure this is not accidentally overridden.
